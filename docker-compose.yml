@@ -1,0 +1,100 @@
+version: '3'
+services:
+  # MySQL Service
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-container
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpwd # Set the root password
+      MYSQL_DATABASE: smiledb      # Create a default database
+      MYSQL_USER: smileuser        # Create a default user
+      MYSQL_PASSWORD: smilepwd     # Set the password for the user
+    ports:
+      - "3306:3306"
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --ssl=DISABLED
+      --log-bin=mysql-bin
+      --server-id=1
+      --binlog-format=ROW
+      --gtid_mode=ON
+      --enforce-gtid-consistency=ON
+  
+  # materialized Service
+  materialized:
+    image: materialize/materialized:latest
+    container_name: materialized
+    ports:
+      - "6874:6874"
+      - "6875:6875"
+  
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.7.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  # Kafka Service
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: kafka
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: EXTERNAL://:9092,INTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: EXTERNAL://host.docker.internal:9092, INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: EXTERNAL:PLAINTEXT, INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      #KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
+      #KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:29092"
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+  
+  # Kafka Connect with Debezium
+  debezium-connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: debezium-connect
+    environment:
+      BOOTSTRAP_SERVERS: "kafka:29092"
+      GROUP_ID: "1"
+      CONFIG_STORAGE_TOPIC: "connect-configs"
+      OFFSET_STORAGE_TOPIC: "connect-offsets"
+      STATUS_STORAGE_TOPIC: "connect-statuses"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "debezium-connect"
+      CONNECT_REST_PORT: 8083
+      CONNECT_EXACTLY_ONCE_SUPPORT: "true"
+      LOG_LEVEL: WARNING
+    ports:
+      - "8083:8083"
+    depends_on:
+      - kafka
+    volumes:
+      - /opt/cdc/debezium-connect/connect-log4j.properties:/kafka/config/connect-log4j.properties:ro
+      - ./debezium-logs:/kafka/logs
+      - ./clickhouse-kafka-connect-v1.2.4:/kafka/connect/clickhouse-kafka-connect-v1.2.4
+  
+
+  # clickhouse Service
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse
+    environment:
+      - CLICKHOUSE_DB=bronze_layer
+      - CLICKHOUSE_USER=dwh_user
+      - CLICKHOUSE_PASSWORD=dwh_password
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    expose: 
+      - "8123"
+      - "9000"
+    restart: unless-stopped
